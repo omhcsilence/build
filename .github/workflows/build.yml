@@ -1,9 +1,44 @@
 name: Build APK
 
 on:
-  push:
-    branches:
-      - build
+  workflow_dispatch:
+    inputs:
+      type:
+        description: 'Build type (flutter or web2apk)'
+        required: true
+        type: choice
+        options:
+          - flutter
+          - web2apk
+      tag:
+        description: 'Release tag containing ZIP (flutter)'
+        required: false
+        type: string
+      build_type:
+        description: 'Build type: release or debug'
+        required: false
+        type: choice
+        default: 'release'
+        options:
+          - release
+          - debug
+      url:
+        description: 'Website URL (web2apk)'
+        required: false
+        type: string
+      web_url:
+        description: 'Website URL alt (web2apk)'
+        required: false
+        type: string
+      app_name:
+        description: 'App name'
+        required: false
+        type: string
+        default: 'MyApp'
+      icon_url:
+        description: 'Icon URL (web2apk)'
+        required: false
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -36,38 +71,47 @@ jobs:
           sdk use gradle 8.9
           gradle --version
 
-      - name: Validate build config
-        id: validate
-        run: |
-          if [ ! -f build-config.json ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "No build-config.json found, exiting."
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Read build config
-        if: steps.validate.outputs.skip != 'true'
+      - name: Create build config from workflow inputs
         id: config
         run: |
-          echo "type=$(jq -r .type build-config.json)" >> $GITHUB_ENV
-          echo "url=$(jq -r .url build-config.json)" >> $GITHUB_ENV
-          echo "app_name=$(jq -r .app_name build-config.json)" >> $GITHUB_ENV
-          echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_ENV
-          TAG_VAL=$(jq -r '.tag // ""' build-config.json)
+          WEB_URL="${{ inputs.url }}"
+          if [ -z "$WEB_URL" ]; then
+            WEB_URL="${{ inputs.web_url }}"
+          fi
+          cat > build-config.json <<CFGEOF
+          {
+            "type": "${{ inputs.type }}",
+            "tag": "${{ inputs.tag }}",
+            "build_type": "${{ inputs.build_type || 'release' }}",
+            "url": "$WEB_URL",
+            "app_name": "${{ inputs.app_name || 'MyApp' }}",
+            "icon_url": "${{ inputs.icon_url }}"
+          }
+          CFGEOF
+          echo "type=${{ inputs.type }}" >> $GITHUB_ENV
+          echo "url=$WEB_URL" >> $GITHUB_ENV
+          echo "app_name=${{ inputs.app_name || 'MyApp' }}" >> $GITHUB_ENV
+          echo "build_type=${{ inputs.build_type || 'release' }}" >> $GITHUB_ENV
+          TAG_VAL="${{ inputs.tag }}"
           if [ -n "$TAG_VAL" ]; then
             echo "tag=$TAG_VAL" >> $GITHUB_ENV
           fi
+          ICON_VAL="${{ inputs.icon_url }}"
+          if [ -n "$ICON_VAL" ]; then
+            echo "icon_url=$ICON_VAL" >> $GITHUB_ENV
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "=== Build Config ==="
           cat build-config.json
 
       - name: Generate keystore for signing (all builds)
-        if: steps.validate.outputs.skip != 'true'
+        if: steps.config.outputs.skip != 'true'
         run: |
           keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass password -keypass password -dname "CN=BuildBot, OU=Dev, O=BuildBot, L=City, S=State, C=ID"
 
       # ---------- AUTO DOWNLOAD ICON ----------
       - name: Download default icon if missing
-        if: steps.validate.outputs.skip != 'true'
+        if: steps.config.outputs.skip != 'true'
         run: |
           mkdir -p build-assets
           if [ ! -f build-assets/icon.png ] || [ ! -s build-assets/icon.png ]; then
@@ -86,7 +130,7 @@ jobs:
 
       # ---------- DOWNLOAD FLUTTER ZIP FROM RELEASE ----------
       - name: Download Flutter project ZIP from release
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -118,7 +162,7 @@ jobs:
 
       # ---------- Web2APK ----------
       - name: Web2APK - Create root gradle files
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           mkdir -p project
           cat > project/build.gradle <<EOF
@@ -165,7 +209,7 @@ jobs:
           EOF
 
       - name: Web2APK - Create app/build.gradle
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           mkdir -p project/app
           cat > project/app/build.gradle <<EOF
@@ -219,7 +263,7 @@ jobs:
           EOF
 
       - name: Web2APK - Create Java source files
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           mkdir -p project/app/src/main/java/com/web2apk/app
           cat > project/app/src/main/java/com/web2apk/app/MainActivity.java <<EOF
@@ -368,7 +412,7 @@ jobs:
           EOF
 
       - name: Web2APK - Create AndroidManifest.xml and layouts
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           mkdir -p project/app/src/main/res/layout
           mkdir -p project/app/src/main/res/values
@@ -499,7 +543,7 @@ jobs:
           EOF
 
       - name: Web2APK - Apply URL, app name, icons, and keystore
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           sed -i "s|URL_PLACEHOLDER|${{ env.url }}|g" project/app/src/main/java/com/web2apk/app/MainActivity.java
           sed -i "s|<string name=\"app_name\">.*</string>|<string name=\"app_name\">${{ env.app_name }}</string>|g" project/app/src/main/res/values/strings.xml
@@ -520,14 +564,14 @@ jobs:
           keytool -genkey -v -keystore project/app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug, O=Android, C=US"
 
       - name: Web2APK - Build
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           cd project
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           gradle assembleRelease
 
       - name: Web2APK - Sign APK
-        if: steps.validate.outputs.skip != 'true' && env.type == 'web2apk'
+        if: steps.config.outputs.skip != 'true' && env.type == 'web2apk'
         run: |
           APK_PATH=$(find project/app/build/outputs/apk/release -name "*.apk" | head -n 1)
           if [ -f "$APK_PATH" ]; then
@@ -541,7 +585,7 @@ jobs:
 
       # ---------- FLUTTER ----------
       - name: Prepare Flutter project
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         run: |
           rm -rf flutter-project
           mkdir -p flutter-project
@@ -561,7 +605,7 @@ jobs:
           fi
 
       - name: Generate Flutter app icons
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         run: |
           cd flutter-project
           mkdir -p android/app/src/main/res
@@ -583,7 +627,7 @@ jobs:
           echo "Icons Flutter berhasil digenerate"
 
       - name: Fix Flutter Android configuration (compileSdk 36 & signing)
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         run: |
           cd flutter-project/android/app
           cp ../../../release.keystore .
@@ -611,7 +655,7 @@ jobs:
           fi
 
       - name: Detect Flutter version from pubspec
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         id: flutter_detect
         shell: bash
         run: |
@@ -682,7 +726,7 @@ jobs:
           echo "Using Flutter $FLUTTER_VERSION"
 
       - name: Setup Flutter SDK
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -690,7 +734,7 @@ jobs:
           cache: true
 
       - name: Build Flutter APK with auto-detection and auto-fix
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter'
         shell: bash
         run: |
           cd flutter-project
@@ -847,7 +891,7 @@ jobs:
           fi
 
       - name: Verify Flutter APK signature
-        if: steps.validate.outputs.skip != 'true' && env.type == 'flutter' && env.build_type == 'release'
+        if: steps.config.outputs.skip != 'true' && env.type == 'flutter' && env.build_type == 'release'
         run: |
           APK_PATH=$(find flutter-project/build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
           if [ -f "$APK_PATH" ]; then
@@ -860,7 +904,7 @@ jobs:
 
       # ---------- UPLOAD ----------
       - name: Upload APK
-        if: steps.validate.outputs.skip != 'true'
+        if: steps.config.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: app
