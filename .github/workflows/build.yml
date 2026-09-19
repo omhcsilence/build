@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - build
+      - main
+      - master
   workflow_dispatch:
     inputs:
       type:
@@ -17,6 +19,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  type: ${{ github.event.inputs.type || 'flutter' }}
+  build_type: ${{ github.event.inputs.build_type || 'release' }}
 
 jobs:
   build:
@@ -48,20 +52,31 @@ jobs:
       - name: Read build config
         id: config
         run: |
-          # 1. Cek workflow_dispatch inputs dulu (paling prioritized)
-          if [ -n "${{ github.event.inputs.type }}" ]; then
-            echo "type=${{ github.event.inputs.type }}" >> $GITHUB_ENV
-            echo "build_type=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
-            echo "Menggunakan input dari workflow_dispatch: type=${{ github.event.inputs.type }}, build_type=${{ github.event.inputs.build_type }}"
-          # 2. Kalau tidak ada, cek build-config.json di repo
-          elif [ -f build-config.json ]; then
-            echo "type=$(jq -r .type build-config.json)" >> $GITHUB_ENV
-            echo "url=$(jq -r .url build-config.json)" >> $GITHUB_ENV
-            echo "app_name=$(jq -r .app_name build-config.json)" >> $GITHUB_ENV
-            echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_ENV
+          # Env vars type & build_type sudah di-set di global env block
+          # (default: type=flutter, build_type=release)
+          # Sekarang ambil url & app_name dari build-config.json kalau ada
+          if [ -f build-config.json ]; then
+            # Jangan override type/build_type kalau sudah di-set via dispatch
+            URL_VAL=$(jq -r '.url // ""' build-config.json)
+            APP_VAL=$(jq -r '.app_name // "App"' build-config.json)
+            if [ -z "${{ env.type }}" ] || [ "${{ env.type }}" = "flutter" ]; then
+              TYPE_VAL=$(jq -r '.type // "flutter"' build-config.json)
+              echo "type=$TYPE_VAL" >> $GITHUB_ENV
+            fi
+            echo "url=$URL_VAL" >> $GITHUB_ENV
+            echo "app_name=$APP_VAL" >> $GITHUB_ENV
+            BT_VAL=$(jq -r '.build_type // ""' build-config.json)
+            if [ -n "$BT_VAL" ] && [ -z "${{ github.event.inputs.build_type }}" ]; then
+              echo "build_type=$BT_VAL" >> $GITHUB_ENV
+            fi
+            echo "build-config.json ditemukan:"
             cat build-config.json
           else
-            echo "type=unknown" >> $GITHUB_ENV
+            # Kalau tidak ada build-config.json, pakai default
+            echo "type=${{ env.type }}" >> $GITHUB_ENV
+            echo "build_type=${{ env.build_type }}" >> $GITHUB_ENV
+            echo "app_name=App" >> $GITHUB_ENV
+            echo "build-config.json tidak ditemukan, pakai default: type=${{ env.type }}, build_type=${{ env.build_type }}"
           fi
 
       - name: Generate keystore for signing (all builds)
