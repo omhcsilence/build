@@ -598,7 +598,7 @@ jobs:
               if grep -q "flutter_launcher_icons" pubspec.yaml; then
                 # Tambahkan ke dev_dependencies kalau belum ada
                 if ! grep -q "  flutter_launcher_icons:" pubspec.yaml; then
-                  python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); d.setdefault('dev_dependencies',{})['flutter_launcher_icons']='^0.13.1'; yaml.dump(d,open('pubspec.yaml','w'),default_flow_style=False,sort_keys=False,width=1000)"
+                  sed -i '/^dev_dependencies:/a\  flutter_launcher_icons: ^0.13.1' pubspec.yaml
                 fi
                 flutter pub get
                 dart run flutter_launcher_icons || flutter pub run flutter_launcher_icons:main || true
@@ -831,12 +831,7 @@ jobs:
           fi
 
           # Flutter 3.27+ helpers
-          if grep -Eq 'flutter_sound:[[:space:]]*(\^|>=)?9\.([2-9][0-9])' "$PUBSPEC"; then
-            # flutter_sound 9.20+ needs Dart >=3.7.2 → Flutter 3.29.0+
-            FLUTTER_VERSION="3.29.0"
-            echo "Override: flutter_sound 9.20+ → Flutter $FLUTTER_VERSION (Dart 3.7+)"
-          elif grep -Eq 'flutter_sound:[[:space:]]*(\^|>=)?9\.([1][0-9])' "$PUBSPEC"; then
-            # flutter_sound 9.10-9.19 needs Dart 3.6+ → Flutter 3.27.0
+          if grep -Eq 'flutter_sound:[[:space:]]*(\^|>=)?9\.([1-9][0-9])' "$PUBSPEC"; then
             if [ "$FLUTTER_VERSION" \< "3.27.0" ] 2>/dev/null; then
               FLUTTER_VERSION="3.27.0"
               echo "Override: flutter_sound 9.10+ → Flutter $FLUTTER_VERSION"
@@ -915,21 +910,6 @@ jobs:
         run: |
           cd flutter-project
 
-          # === VALIDASI pubspec.yaml sebelum build ===
-          if ! python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); assert 'name' in d and 'dependencies' in d" 2>/dev/null; then
-            echo "❌ pubspec.yaml KORUP sebelum build dimulai!"
-            echo "=== Isi pubspec.yaml (first 30 lines) ==="
-            head -30 pubspec.yaml
-            exit 1
-          fi
-          echo "✅ pubspec.yaml valid sebelum build"
-
-          # === SELALU: pastikan flutter_sound pinned (no caret) ===
-          if grep -Eq 'flutter_sound:[[:space:]]*\^' pubspec.yaml 2>/dev/null; then
-            echo "⚠️ flutter_sound menggunakan caret — ganti ke exact 9.2.13"
-            python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); d['dependencies'].__setitem__('flutter_sound','9.2.13') if 'flutter_sound' in d.get('dependencies',{}) else None; yaml.dump(d,open('pubspec.yaml','w'),default_flow_style=False,sort_keys=False,width=1000); print('✅ flutter_sound pinned ke 9.2.13')"
-          fi
-
           echo "=== Flutter Version (initial) ==="
           flutter --version
           echo "=================================="
@@ -997,7 +977,7 @@ jobs:
 
             if ! grep -q "^  http:" pubspec.yaml; then
               echo "Menambahkan dependency http ke pubspec.yaml"
-              python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); d.setdefault('dependencies',{})['http']='^1.2.0'; yaml.dump(d,open('pubspec.yaml','w'),default_flow_style=False,sort_keys=False,width=1000)"
+              sed -i '/dependencies:/a \ \ http: ^1.2.0' pubspec.yaml
               CHANGED=1
             fi
 
@@ -1014,232 +994,115 @@ jobs:
 
           # ====================================================================
           # FUNGSI: Perbaikan pubspec (plugin version) - komprehensif
-          # Menggunakan Python3 untuk modifikasi YAML yang AMAN (tanpa sed)
           # ====================================================================
           auto_fix_pubspec() {
             local FIXED=false
             echo "=== Auto-fixing pubspec.yaml ==="
 
-            # --- SELALU: backup pubspec.yaml sebelum modifikasi ---
-            cp -f pubspec.yaml pubspec.yaml.bak
-
-            # --- SELALU: cek apakah YAML korup, kalau iya restore dulu ---
-            if ! python3 -c "import yaml; yaml.safe_load(open('pubspec.yaml'))" 2>/dev/null; then
-              echo "⚠️ pubspec.yaml KORUP! Restore dari backup..."
-              if [ -f pubspec.yaml.bak ]; then
-                cp -f pubspec.yaml.bak pubspec.yaml
-                echo "✅ Restored dari backup"
-              fi
-            fi
-
-            # --- Build daftar perbaikan ---
-            NEED_SDK_FIX=false
-            NEED_DEP_FIX=false
-            SDK_NEW=""
-
             if grep -q "requires SDK version" "$PUB_LOG" || grep -q "requires Dart SDK version" "$PUB_LOG"; then
               echo "Fix: Menurunkan SDK constraint ke >=3.6.0 <4.0.0"
-              SDK_NEW=">=3.6.0 <4.0.0"
-              NEED_SDK_FIX=true
+              sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
               FIXED=true
             fi
 
             if grep -q "version solving failed" "$PUB_LOG"; then
               echo "Fix: Broad SDK constraint untuk resolve conflict"
-              # Jangan override kalau SDK sudah di-set dari condition di atas
-              if [ -z "$SDK_NEW" ]; then
-                SDK_NEW=">=3.0.0 <4.0.0"
-                NEED_SDK_FIX=true
-              fi
+              sed -i -E "s/sdk:[[:space:]]*['\"]?\^3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.0.0 <4.0.0\"/g" pubspec.yaml || true
               FIXED=true
             fi
-
-            # --- Daftar package downgrade (format: pkg_name|version) ---
-            PKG_FIXES=""
 
             if grep -q "webview_flutter" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan webview_flutter ke ^4.13.0"
-              PKG_FIXES="${PKG_FIXES}|webview_flutter|^4.13.0"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan webview_flutter ke 4.13.0"
+              sed -i -E "s/webview_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/webview_flutter: ^4.13.0/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "geolocator" "$PUB_LOG" && (grep -q "toARGB32" "$PUB_LOG" || grep -q "geolocator_android" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan geolocator ke ^13.0.4"
-              PKG_FIXES="${PKG_FIXES}|geolocator|^13.0.4"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan geolocator ke 13.0.4"
+              sed -i -E "s/geolocator:[[:space:]]*['\"]?[^'\"]+['\"]?/geolocator: ^13.0.4/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "google_maps_flutter" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan google_maps_flutter ke ^2.9.0"
-              PKG_FIXES="${PKG_FIXES}|google_maps_flutter|^2.9.0"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan google_maps_flutter ke 2.9.0"
+              sed -i -E "s/google_maps_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/google_maps_flutter: ^2.9.0/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "permission_handler" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan permission_handler ke ^11.3.1"
-              PKG_FIXES="${PKG_FIXES}|permission_handler|^11.3.1"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan permission_handler ke 11.3.1"
+              sed -i -E "s/permission_handler:[[:space:]]*['\"]?[^'\"]+['\"]?/permission_handler: ^11.3.1/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "firebase_core" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan firebase_core ke ^2.32.0"
-              PKG_FIXES="${PKG_FIXES}|firebase_core|^2.32.0"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan firebase_core ke 2.32.0"
+              sed -i -E "s/firebase_core:[[:space:]]*['\"]?[^'\"]+['\"]?/firebase_core: ^2.32.0/g" pubspec.yaml || true
+              sed -i -E "s/firebase_[a-z_]+:[[:space:]]*['\"]?[^'\"]+['\"]?/firebase_\1: ^2.32.0/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "file_picker" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan file_picker ke ^6.2.1"
-              PKG_FIXES="${PKG_FIXES}|file_picker|^6.2.1"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan file_picker ke 6.2.1"
+              sed -i -E "s/file_picker:[[:space:]]*['\"]?[^'\"]+['\"]?/file_picker: ^6.2.1/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "image_picker" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan image_picker ke ^1.1.2"
-              PKG_FIXES="${PKG_FIXES}|image_picker|^1.1.2"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan image_picker ke 1.1.2"
+              sed -i -E "s/image_picker:[[:space:]]*['\"]?[^'\"]+['\"]?/image_picker: ^1.1.2/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "flutter_local_notifications" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan flutter_local_notifications ke ^17.2.4"
-              PKG_FIXES="${PKG_FIXES}|flutter_local_notifications|^17.2.4"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan flutter_local_notifications ke 17.2.4"
+              sed -i -E "s/flutter_local_notifications:[[:space:]]*['\"]?[^'\"]+['\"]?/flutter_local_notifications: ^17.2.4/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "workmanager" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Menurunkan workmanager ke ^0.5.2"
-              PKG_FIXES="${PKG_FIXES}|workmanager|^0.5.2"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan workmanager ke 0.5.2"
+              sed -i -E "s/workmanager:[[:space:]]*['\"]?[^'\"]+['\"]?/workmanager: ^0.5.2/g" pubspec.yaml || true
               FIXED=true
             fi
+
             if grep -q "flutter_sound" "$PUB_LOG" && (grep -q "requires SDK version" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
-              echo "Fix: Pin flutter_sound ke exact 9.2.13 (no caret — prevents resolving to 9.29+ which needs Dart >=3.7.2)"
-              PKG_FIXES="${PKG_FIXES}|flutter_sound|9.2.13"
-              NEED_DEP_FIX=true
-              FIXED=true
-            fi
-            if grep -q "flutter_webrtc" "$PUB_LOG" && (grep -q "version solving failed" "$PUB_LOG" || grep -q "requires SDK version" "$PUB_LOG"); then
-              echo "Fix: Menurunkan flutter_webrtc ke ^0.9.24"
-              PKG_FIXES="${PKG_FIXES}|flutter_webrtc|^0.9.24"
-              NEED_DEP_FIX=true
-              FIXED=true
-            fi
-            if grep -q "audioplayers" "$PUB_LOG" && grep -q "version solving failed" "$PUB_LOG"; then
-              echo "Fix: Menurunkan audioplayers ke ^5.2.1"
-              PKG_FIXES="${PKG_FIXES}|audioplayers|^5.2.1"
-              NEED_DEP_FIX=true
-              FIXED=true
-            fi
-            if grep -Eq "permission_handler.*requires SDK" "$PUB_LOG"; then
-              echo "Fix: permission_handler diturunkan ke ^10.4.3"
-              PKG_FIXES="${PKG_FIXES}|permission_handler|^10.4.3"
-              NEED_DEP_FIX=true
+              echo "Fix: Menurunkan flutter_sound ke 9.2.13"
+              sed -i -E "s/flutter_sound:[[:space:]]*['\"]?[^'\"]+['\"]?/flutter_sound: ^9.2.13/g" pubspec.yaml || true
               FIXED=true
             fi
 
-            # --- SELALU: pastikan flutter_sound pinned (no caret) ---
-            # Ini mencegah flutter_sound resolve ke 9.29+ yang butuh Dart >=3.7.2
-            if grep -Eq 'flutter_sound:[[:space:]]*\^' pubspec.yaml 2>/dev/null; then
-              echo "Fix: flutter_sound masih pakai caret, ganti ke exact 9.2.13"
-              PKG_FIXES="${PKG_FIXES}|flutter_sound|9.2.13"
-              NEED_DEP_FIX=true
-              FIXED=true
-            fi
-
-            # --- record package fix ---
             if grep -q "record" "$PUB_LOG" && (grep -q "missing implementations" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
               echo "Fix: Hapus record package, ganti dengan flutter_sound"
-              PKG_FIXES="${PKG_FIXES}|_remove_record|true"
-              NEED_DEP_FIX=true
+              sed -i -E "/^  record:/d" pubspec.yaml || true
+              if ! grep -q "flutter_sound:" pubspec.yaml; then
+                sed -i '/dependencies:/a \ \ flutter_sound: ^9.2.13' pubspec.yaml
+              fi
               FIXED=true
             fi
 
-            # --- dependency_overrides fix ---
+            if grep -q "flutter_webrtc" "$PUB_LOG" && (grep -q "version solving failed" "$PUB_LOG" || grep -q "requires SDK version" "$PUB_LOG"); then
+              echo "Fix: Menurunkan flutter_webrtc ke 0.9.24"
+              sed -i -E "s/flutter_webrtc:[[:space:]]*['\"]?[^'\"]+['\"]?/flutter_webrtc: ^0.9.24/g" pubspec.yaml || true
+              FIXED=true
+            fi
+
             if grep -q "overrides" "$PUB_LOG" || grep -q "dependency_overrides" "$PUB_LOG"; then
               echo "Fix: Menghapus dependency_overrides"
-              PKG_FIXES="${PKG_FIXES}|_remove_overrides|true"
-              NEED_DEP_FIX=true
+              sed -i '/^dependency_overrides:/,/^[^ ]/d' pubspec.yaml || true
               FIXED=true
             fi
 
-            # --- Jalankan Python3 untuk apply fixes secara AMAN ---
-            if [ "$NEED_SDK_FIX" = true ] || [ "$NEED_DEP_FIX" = true ]; then
-              export SDK_NEW PKG_FIXES
-              # Tulis Python script ke file sementara via echo (aman di YAML block scalar)
-              rm -f /tmp/_fix_pubspec.py
-              echo 'import yaml, sys, os, shutil' >> /tmp/_fix_pubspec.py
-              echo 'pubspec_path = "pubspec.yaml"' >> /tmp/_fix_pubspec.py
-              echo 'sdk_new = os.environ.get("SDK_NEW", "")' >> /tmp/_fix_pubspec.py
-              echo 'pkg_fixes = os.environ.get("PKG_FIXES", "")' >> /tmp/_fix_pubspec.py
-              echo 'try:' >> /tmp/_fix_pubspec.py
-              echo '    with open(pubspec_path, "r") as f:' >> /tmp/_fix_pubspec.py
-              echo '        data = yaml.safe_load(f)' >> /tmp/_fix_pubspec.py
-              echo 'except Exception as e:' >> /tmp/_fix_pubspec.py
-              echo '    print(f"Gagal parse pubspec.yaml: {e}")' >> /tmp/_fix_pubspec.py
-              echo '    shutil.copy2("pubspec.yaml.bak", pubspec_path)' >> /tmp/_fix_pubspec.py
-              echo '    sys.exit(1)' >> /tmp/_fix_pubspec.py
-              echo 'changed = False' >> /tmp/_fix_pubspec.py
-              echo 'if sdk_new and "environment" in data:' >> /tmp/_fix_pubspec.py
-              echo '    old_sdk = data["environment"].get("sdk", "")' >> /tmp/_fix_pubspec.py
-              echo '    data["environment"]["sdk"] = sdk_new' >> /tmp/_fix_pubspec.py
-              echo '    print(f"SDK: {old_sdk!r} -> {sdk_new!r}")' >> /tmp/_fix_pubspec.py
-              echo '    changed = True' >> /tmp/_fix_pubspec.py
-              echo 'if pkg_fixes and "dependencies" in data:' >> /tmp/_fix_pubspec.py
-              echo '    deps = data["dependencies"]' >> /tmp/_fix_pubspec.py
-              echo '    parts = [p.strip() for p in pkg_fixes.split("|") if p.strip()]' >> /tmp/_fix_pubspec.py
-              echo '    i = 0' >> /tmp/_fix_pubspec.py
-              echo '    while i < len(parts):' >> /tmp/_fix_pubspec.py
-              echo '        pkg_name = parts[i]' >> /tmp/_fix_pubspec.py
-              echo '        if pkg_name == "_remove_record":' >> /tmp/_fix_pubspec.py
-              echo '            if "record" in deps:' >> /tmp/_fix_pubspec.py
-              echo '                del deps["record"]' >> /tmp/_fix_pubspec.py
-              echo '                print("Hapus package: record")' >> /tmp/_fix_pubspec.py
-              echo '                changed = True' >> /tmp/_fix_pubspec.py
-              echo '            if "flutter_sound" not in deps:' >> /tmp/_fix_pubspec.py
-              echo '                deps["flutter_sound"] = "9.2.13"' >> /tmp/_fix_pubspec.py
-              echo '                print("Tambah package: flutter_sound = 9.2.13")' >> /tmp/_fix_pubspec.py
-              echo '                changed = True' >> /tmp/_fix_pubspec.py
-              echo '            i += 1' >> /tmp/_fix_pubspec.py
-              echo '            continue' >> /tmp/_fix_pubspec.py
-              echo '        if pkg_name == "_remove_overrides":' >> /tmp/_fix_pubspec.py
-              echo '            i += 1' >> /tmp/_fix_pubspec.py
-              echo '            continue' >> /tmp/_fix_pubspec.py
-              echo '        if i + 1 < len(parts):' >> /tmp/_fix_pubspec.py
-              echo '            version = parts[i + 1]' >> /tmp/_fix_pubspec.py
-              echo '            if pkg_name in deps:' >> /tmp/_fix_pubspec.py
-              echo '                old_ver = deps[pkg_name]' >> /tmp/_fix_pubspec.py
-              echo '                deps[pkg_name] = version' >> /tmp/_fix_pubspec.py
-              echo '                print(f"Dep: {pkg_name}: {old_ver!r} -> {version!r}")' >> /tmp/_fix_pubspec.py
-              echo '                changed = True' >> /tmp/_fix_pubspec.py
-              echo '            else:' >> /tmp/_fix_pubspec.py
-              echo '                deps[pkg_name] = version' >> /tmp/_fix_pubspec.py
-              echo '                print(f"Tambah dep: {pkg_name}: {version}")' >> /tmp/_fix_pubspec.py
-              echo '                changed = True' >> /tmp/_fix_pubspec.py
-              echo '            i += 2' >> /tmp/_fix_pubspec.py
-              echo '        else:' >> /tmp/_fix_pubspec.py
-              echo '            i += 1' >> /tmp/_fix_pubspec.py
-              echo 'if "dependency_overrides" in data:' >> /tmp/_fix_pubspec.py
-              echo '    del data["dependency_overrides"]' >> /tmp/_fix_pubspec.py
-              echo '    print("Hapus dependency_overrides")' >> /tmp/_fix_pubspec.py
-              echo '    changed = True' >> /tmp/_fix_pubspec.py
-              echo 'if changed:' >> /tmp/_fix_pubspec.py
-              echo '    class IndentDumper(yaml.Dumper):' >> /tmp/_fix_pubspec.py
-              echo '        def increase_indent(self, flow=False, indentless=False):' >> /tmp/_fix_pubspec.py
-              echo '            return super().increase_indent(flow, False)' >> /tmp/_fix_pubspec.py
-              echo '    with open(pubspec_path, "w") as f:' >> /tmp/_fix_pubspec.py
-              echo '        yaml.dump(data, f, Dumper=IndentDumper, default_flow_style=False, allow_unicode=True, sort_keys=False, width=1000)' >> /tmp/_fix_pubspec.py
-              echo '    print("pubspec.yaml updated safely via Python3 yaml library")' >> /tmp/_fix_pubspec.py
-              echo 'else:' >> /tmp/_fix_pubspec.py
-              echo '    print("Tidak ada perubahan diterapkan")' >> /tmp/_fix_pubspec.py
-              python3 /tmp/_fix_pubspec.py
+            if grep -q "audioplayers" "$PUB_LOG" && grep -q "version solving failed" "$PUB_LOG"; then
+              echo "Fix: Menurunkan audioplayers ke 5.2.1"
+              sed -i -E "s/audioplayers:[[:space:]]*['\"]?[^'\"]+['\"]?/audioplayers: ^5.2.1/g" pubspec.yaml || true
+              FIXED=true
+            fi
 
-              # --- VALIDASI YAML setelah Python3 write ---
-              if ! python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); assert 'name' in d and 'dependencies' in d, 'Missing key sections'" 2>/dev/null; then
-                echo "⚠️ YAML masih korup setelah Python3 fix! Restore dari backup..."
-                cp -f pubspec.yaml.bak pubspec.yaml
-                FIXED=false
-              else
-                echo "✅ YAML valid setelah fix"
-              fi
+            if grep -Eq "permission_handler.*requires SDK" "$PUB_LOG"; then
+              echo "Fix: permission_handler diturunkan ke 10.4.3"
+              sed -i -E "s/permission_handler:[[:space:]]*['\"]?[^'\"]+['\"]?/permission_handler: ^10.4.3/g" pubspec.yaml || true
+              FIXED=true
             fi
 
             if [ "$FIXED" = true ]; then
@@ -1289,7 +1152,10 @@ jobs:
             if grep -q "RecordLinux" "$BUILD_LOG" && grep -q "missing implementations" "$BUILD_LOG"; then
               echo "Fix: Hapus record package, ganti flutter_sound"
               if grep -q "^  record:" pubspec.yaml; then
-                python3 -c "import yaml; d=yaml.safe_load(open('pubspec.yaml')); d.get('dependencies',{}).pop('record',None); d.setdefault('dependencies',{}).setdefault('flutter_sound','9.2.13'); yaml.dump(d,open('pubspec.yaml','w'),default_flow_style=False,sort_keys=False,width=1000)"
+                sed -i -E "/^  record:/d" pubspec.yaml
+                if ! grep -q "flutter_sound:" pubspec.yaml; then
+                  sed -i '/dependencies:/a \ \ flutter_sound: ^9.2.13' pubspec.yaml
+                fi
                 FIXED=true
               fi
             fi
