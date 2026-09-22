@@ -1164,73 +1164,72 @@ jobs:
             # --- Jalankan Python3 untuk apply fixes secara AMAN ---
             if [ "$NEED_SDK_FIX" = true ] || [ "$NEED_DEP_FIX" = true ]; then
               export SDK_NEW PKG_FIXES
-              # Tulis Python script ke file sementara (aman di YAML block scalar)
-              cat > /tmp/_fix_pubspec.py << 'PYEOF'
-              import yaml, sys, os, shutil
-              pubspec_path = 'pubspec.yaml'
-              sdk_new = os.environ.get('SDK_NEW', '')
-              pkg_fixes = os.environ.get('PKG_FIXES', '')
-              try:
-                  with open(pubspec_path, 'r') as f:
-                      data = yaml.safe_load(f)
-              except Exception as e:
-                  print(f"❌ Gagal parse pubspec.yaml: {e}")
-                  shutil.copy2('pubspec.yaml.bak', pubspec_path)
-                  sys.exit(1)
-              changed = False
-              if sdk_new and 'environment' in data:
-                  old_sdk = data['environment'].get('sdk', '')
-                  data['environment']['sdk'] = sdk_new
-                  print(f"SDK: {old_sdk!r} -> {sdk_new!r}")
-                  changed = True
-              if pkg_fixes and 'dependencies' in data:
-                  deps = data['dependencies']
-                  parts = [p.strip() for p in pkg_fixes.split('|') if p.strip()]
-                  i = 0
-                  while i < len(parts):
-                      pkg_name = parts[i]
-                      if pkg_name == '_remove_record':
-                          if 'record' in deps:
-                              del deps['record']
-                              print("Hapus package: record")
-                              changed = True
-                          if 'flutter_sound' not in deps:
-                              deps['flutter_sound'] = '9.2.13'
-                              print("Tambah package: flutter_sound = 9.2.13")
-                              changed = True
-                          i += 1
-                          continue
-                      if pkg_name == '_remove_overrides':
-                          i += 1
-                          continue
-                      if i + 1 < len(parts):
-                          version = parts[i + 1]
-                          if pkg_name in deps:
-                              old_ver = deps[pkg_name]
-                              deps[pkg_name] = version
-                              print(f"Dep: {pkg_name}: {old_ver!r} -> {version!r}")
-                              changed = True
-                          else:
-                              deps[pkg_name] = version
-                              print(f"Tambah dep: {pkg_name}: {version}")
-                              changed = True
-                          i += 2
-                      else:
-                          i += 1
-              if 'dependency_overrides' in data:
-                  del data['dependency_overrides']
-                  print("Hapus dependency_overrides")
-                  changed = True
-              if changed:
-                  class IndentDumper(yaml.Dumper):
-                      def increase_indent(self, flow=False, indentless=False):
-                          return super().increase_indent(flow, False)
-                  with open(pubspec_path, 'w') as f:
-                      yaml.dump(data, f, Dumper=IndentDumper, default_flow_style=False, allow_unicode=True, sort_keys=False, width=1000)
-                  print("✅ pubspec.yaml updated safely via Python3 yaml library")
-              else:
-                  print("ℹ️ Tidak ada perubahan diterapkan")
-              PYEOF
+              # Tulis Python script ke file sementara via echo (aman di YAML block scalar)
+              rm -f /tmp/_fix_pubspec.py
+              echo 'import yaml, sys, os, shutil' >> /tmp/_fix_pubspec.py
+              echo 'pubspec_path = "pubspec.yaml"' >> /tmp/_fix_pubspec.py
+              echo 'sdk_new = os.environ.get("SDK_NEW", "")' >> /tmp/_fix_pubspec.py
+              echo 'pkg_fixes = os.environ.get("PKG_FIXES", "")' >> /tmp/_fix_pubspec.py
+              echo 'try:' >> /tmp/_fix_pubspec.py
+              echo '    with open(pubspec_path, "r") as f:' >> /tmp/_fix_pubspec.py
+              echo '        data = yaml.safe_load(f)' >> /tmp/_fix_pubspec.py
+              echo 'except Exception as e:' >> /tmp/_fix_pubspec.py
+              echo '    print(f"Gagal parse pubspec.yaml: {e}")' >> /tmp/_fix_pubspec.py
+              echo '    shutil.copy2("pubspec.yaml.bak", pubspec_path)' >> /tmp/_fix_pubspec.py
+              echo '    sys.exit(1)' >> /tmp/_fix_pubspec.py
+              echo 'changed = False' >> /tmp/_fix_pubspec.py
+              echo 'if sdk_new and "environment" in data:' >> /tmp/_fix_pubspec.py
+              echo '    old_sdk = data["environment"].get("sdk", "")' >> /tmp/_fix_pubspec.py
+              echo '    data["environment"]["sdk"] = sdk_new' >> /tmp/_fix_pubspec.py
+              echo '    print(f"SDK: {old_sdk!r} -> {sdk_new!r}")' >> /tmp/_fix_pubspec.py
+              echo '    changed = True' >> /tmp/_fix_pubspec.py
+              echo 'if pkg_fixes and "dependencies" in data:' >> /tmp/_fix_pubspec.py
+              echo '    deps = data["dependencies"]' >> /tmp/_fix_pubspec.py
+              echo '    parts = [p.strip() for p in pkg_fixes.split("|") if p.strip()]' >> /tmp/_fix_pubspec.py
+              echo '    i = 0' >> /tmp/_fix_pubspec.py
+              echo '    while i < len(parts):' >> /tmp/_fix_pubspec.py
+              echo '        pkg_name = parts[i]' >> /tmp/_fix_pubspec.py
+              echo '        if pkg_name == "_remove_record":' >> /tmp/_fix_pubspec.py
+              echo '            if "record" in deps:' >> /tmp/_fix_pubspec.py
+              echo '                del deps["record"]' >> /tmp/_fix_pubspec.py
+              echo '                print("Hapus package: record")' >> /tmp/_fix_pubspec.py
+              echo '                changed = True' >> /tmp/_fix_pubspec.py
+              echo '            if "flutter_sound" not in deps:' >> /tmp/_fix_pubspec.py
+              echo '                deps["flutter_sound"] = "9.2.13"' >> /tmp/_fix_pubspec.py
+              echo '                print("Tambah package: flutter_sound = 9.2.13")' >> /tmp/_fix_pubspec.py
+              echo '                changed = True' >> /tmp/_fix_pubspec.py
+              echo '            i += 1' >> /tmp/_fix_pubspec.py
+              echo '            continue' >> /tmp/_fix_pubspec.py
+              echo '        if pkg_name == "_remove_overrides":' >> /tmp/_fix_pubspec.py
+              echo '            i += 1' >> /tmp/_fix_pubspec.py
+              echo '            continue' >> /tmp/_fix_pubspec.py
+              echo '        if i + 1 < len(parts):' >> /tmp/_fix_pubspec.py
+              echo '            version = parts[i + 1]' >> /tmp/_fix_pubspec.py
+              echo '            if pkg_name in deps:' >> /tmp/_fix_pubspec.py
+              echo '                old_ver = deps[pkg_name]' >> /tmp/_fix_pubspec.py
+              echo '                deps[pkg_name] = version' >> /tmp/_fix_pubspec.py
+              echo '                print(f"Dep: {pkg_name}: {old_ver!r} -> {version!r}")' >> /tmp/_fix_pubspec.py
+              echo '                changed = True' >> /tmp/_fix_pubspec.py
+              echo '            else:' >> /tmp/_fix_pubspec.py
+              echo '                deps[pkg_name] = version' >> /tmp/_fix_pubspec.py
+              echo '                print(f"Tambah dep: {pkg_name}: {version}")' >> /tmp/_fix_pubspec.py
+              echo '                changed = True' >> /tmp/_fix_pubspec.py
+              echo '            i += 2' >> /tmp/_fix_pubspec.py
+              echo '        else:' >> /tmp/_fix_pubspec.py
+              echo '            i += 1' >> /tmp/_fix_pubspec.py
+              echo 'if "dependency_overrides" in data:' >> /tmp/_fix_pubspec.py
+              echo '    del data["dependency_overrides"]' >> /tmp/_fix_pubspec.py
+              echo '    print("Hapus dependency_overrides")' >> /tmp/_fix_pubspec.py
+              echo '    changed = True' >> /tmp/_fix_pubspec.py
+              echo 'if changed:' >> /tmp/_fix_pubspec.py
+              echo '    class IndentDumper(yaml.Dumper):' >> /tmp/_fix_pubspec.py
+              echo '        def increase_indent(self, flow=False, indentless=False):' >> /tmp/_fix_pubspec.py
+              echo '            return super().increase_indent(flow, False)' >> /tmp/_fix_pubspec.py
+              echo '    with open(pubspec_path, "w") as f:' >> /tmp/_fix_pubspec.py
+              echo '        yaml.dump(data, f, Dumper=IndentDumper, default_flow_style=False, allow_unicode=True, sort_keys=False, width=1000)' >> /tmp/_fix_pubspec.py
+              echo '    print("pubspec.yaml updated safely via Python3 yaml library")' >> /tmp/_fix_pubspec.py
+              echo 'else:' >> /tmp/_fix_pubspec.py
+              echo '    print("Tidak ada perubahan diterapkan")' >> /tmp/_fix_pubspec.py
               python3 /tmp/_fix_pubspec.py
 
               # --- VALIDASI YAML setelah Python3 write ---
