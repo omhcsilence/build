@@ -845,6 +845,13 @@ jobs:
             fi
           fi
 
+          if grep -Eq 'font_awesome_flutter:[[:space:]]*(\^|>=)?11\.' "$PUBSPEC"; then
+            if [ "$FLUTTER_VERSION" \< "3.22.0" ] 2>/dev/null; then
+              FLUTTER_VERSION="3.22.0"
+              echo "Override: font_awesome_flutter 11.x → Flutter $FLUTTER_VERSION"
+            fi
+          fi
+
           if grep -Eq 'flutter_webrtc:[[:space:]]*(\^|>=)?0\.(10|11|12)' "$PUBSPEC"; then
             if [ "$FLUTTER_VERSION" \< "3.13.0" ] 2>/dev/null; then
               FLUTTER_VERSION="3.13.0"
@@ -989,6 +996,31 @@ jobs:
               fi
             done
 
+            # font_awesome_flutter v11: Remove .data from FontAwesomeIcons.xxx.data
+            if grep -rlq "FontAwesomeIcons\.\w\+\.data" lib/ --include="*.dart" 2>/dev/null; then
+              echo "Fix: Removing .data from FontAwesomeIcons (v11 compat)"
+              find lib/ -name "*.dart" -exec sed -i -E 's/(FontAwesomeIcons\.[a-zA-Z_0-9]+)\.data/\1/g' {} \; 2>/dev/null || true
+              CHANGED=1
+            fi
+
+            # font_awesome_flutter v11: Ensure ^11.0.0 in pubspec
+            if grep -q "font_awesome_flutter:" pubspec.yaml; then
+              if ! grep -Eq "font_awesome_flutter:[[:space:]]*\^11\." pubspec.yaml; then
+                echo "Fix: Upgrading font_awesome_flutter to ^11.0.0 (v11 compat)"
+                sed -i -E "s/font_awesome_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/font_awesome_flutter: ^11.0.0/g" pubspec.yaml || true
+                CHANGED=1
+              fi
+            fi
+
+            # qr_flutter: Ensure ^4.1.0 for null safety
+            if grep -q "qr_flutter:" pubspec.yaml; then
+              if ! grep -Eq "qr_flutter:[[:space:]]*\^4\." pubspec.yaml; then
+                echo "Fix: Upgrading qr_flutter to ^4.1.0 (null safety)"
+                sed -i -E "s/qr_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/qr_flutter: ^4.1.0/g" pubspec.yaml || true
+                CHANGED=1
+              fi
+            fi
+
             echo "$CHANGED" > /tmp/changed_flag
           }
 
@@ -1001,13 +1033,25 @@ jobs:
 
             if grep -q "requires SDK version" "$PUB_LOG" || grep -q "requires Dart SDK version" "$PUB_LOG"; then
               echo "Fix: Menurunkan SDK constraint ke >=3.6.0 <4.0.0"
-              sed -i -E "s/sdk:[[:space:]]*['\"]?[\^>=]*3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.6.0 <4.0.0\"/g" pubspec.yaml || true
+              # Use Python for safe SDK constraint replacement (avoid sed quote corruption)
+              python3 -c "
+import re
+with open('pubspec.yaml', 'r') as f: content = f.read()
+content = re.sub(r\"(sdk:\\s*)['\"]?[\^>=]*3\\.[0-9]+(\\.[0-9]+)?['\"]?(\\s*<4\\.0\\.0)?['\"]?\", r'\\1\">=3.6.0 <4.0.0\"', content, count=1)
+with open('pubspec.yaml', 'w') as f: f.write(content)
+" 2>/dev/null || true
               FIXED=true
             fi
 
             if grep -q "version solving failed" "$PUB_LOG"; then
               echo "Fix: Broad SDK constraint untuk resolve conflict"
-              sed -i -E "s/sdk:[[:space:]]*['\"]?\^3\.[0-9]+(\.[0-9]+)?['\"]?/sdk: \">=3.0.0 <4.0.0\"/g" pubspec.yaml || true
+              # Use Python for safe SDK constraint replacement (avoid sed quote corruption)
+              python3 -c "
+import re
+with open('pubspec.yaml', 'r') as f: content = f.read()
+content = re.sub(r\"(sdk:\\s*)['\"]?[\^>=]*3\\.[0-9]+(\\.[0-9]+)?['\"]?(\\s*<4\\.0\\.0)?['\"]?\", r'\\1\">=3.0.0 <4.0.0\"', content, count=1)
+with open('pubspec.yaml', 'w') as f: f.write(content)
+" 2>/dev/null || true
               FIXED=true
             fi
 
@@ -1087,6 +1131,18 @@ jobs:
               FIXED=true
             fi
 
+            if grep -q "font_awesome_flutter" "$PUB_LOG" && (grep -q "extends.*IconData" "$PUB_LOG" || grep -q "final class" "$PUB_LOG" || grep -q "version solving failed" "$PUB_LOG"); then
+              echo "Fix: font_awesome_flutter v10 extends final IconData — upgrading to ^11.0.0"
+              sed -i -E "s/font_awesome_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/font_awesome_flutter: ^11.0.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+
+            if grep -q "qr_flutter" "$PUB_LOG" && (grep -q "version solving failed" "$PUB_LOG" || grep -q "null safety" "$PUB_LOG"); then
+              echo "Fix: qr_flutter v3 null safety issue — upgrading to ^4.1.0"
+              sed -i -E "s/qr_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/qr_flutter: ^4.1.0/g" pubspec.yaml || true
+              FIXED=true
+            fi
+
             if grep -q "overrides" "$PUB_LOG" || grep -q "dependency_overrides" "$PUB_LOG"; then
               echo "Fix: Menghapus dependency_overrides"
               sed -i '/^dependency_overrides:/,/^[^ ]/d' pubspec.yaml || true
@@ -1105,7 +1161,22 @@ jobs:
               FIXED=true
             fi
 
+            # Validate YAML syntax after fixes
             if [ "$FIXED" = true ]; then
+              if ! python3 -c "import yaml; yaml.safe_load(open('pubspec.yaml'))" 2>/dev/null; then
+                echo "⚠️ pubspec.yaml may be corrupted, attempting recovery..."
+                python3 -c "
+import re
+with open('pubspec.yaml', 'r') as f: lines = f.readlines()
+fixed = []
+for line in lines:
+    if line.strip().startswith('sdk:'):
+        fixed.append("  sdk: '>=3.6.0 <4.0.0'\n")
+    else:
+        fixed.append(line)
+with open('pubspec.yaml', 'w') as f: f.writelines(fixed)
+" 2>/dev/null || true
+              fi
               echo "✅ Pubspec telah di-fixed"
               rm -f pubspec.lock
             else
@@ -1158,6 +1229,27 @@ jobs:
                 fi
                 FIXED=true
               fi
+            fi
+
+            # font_awesome_flutter v11: .data getter removed
+            if grep -q "\.data" "$BUILD_LOG" 2>/dev/null && grep -q "FontAwesomeIcons" "$BUILD_LOG" 2>/dev/null; then
+              echo "Fix: Removing .data from FontAwesomeIcons (v11 compat)"
+              find lib/ -name "*.dart" -exec sed -i -E 's/(FontAwesomeIcons\.[a-zA-Z_0-9]+)\.data/\1/g' {} \; 2>/dev/null || true
+              FIXED=true
+            fi
+
+            # font_awesome_flutter v10 extends final class IconData
+            if grep -q "extends.*IconData" "$BUILD_LOG" 2>/dev/null && grep -q "font_awesome" "$BUILD_LOG" 2>/dev/null; then
+              echo "Fix: font_awesome_flutter v10 incompatible — upgrading to ^11.0.0"
+              sed -i -E "s/font_awesome_flutter:[[:space:]]*['\"]?[^'\"]+['\"]?/font_awesome_flutter: ^11.0.0/g" pubspec.yaml || true
+              find lib/ -name "*.dart" -exec sed -i -E 's/(FontAwesomeIcons\.[a-zA-Z_0-9]+)\.data/\1/g' {} \; 2>/dev/null || true
+              FIXED=true
+            fi
+
+            # _kBase scope error (top-level constant needed)
+            if grep -q "_kBase" "$BUILD_LOG" 2>/dev/null && grep -q "not defined" "$BUILD_LOG" 2>/dev/null; then
+              echo "⚠️ _kBase scope error — manual fix required in control_panel.dart"
+              FIXED=true
             fi
 
             if [ "$FIXED" = true ]; then
